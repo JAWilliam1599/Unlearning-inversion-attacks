@@ -110,6 +110,7 @@ def train(model, loss_fn, trainloader, validloader, defs, setup=dict(dtype=torch
 def step(model, loss_fn, dataloader, optimizer, scheduler, defs, setup, stats):
     """Step through one epoch."""
     epoch_loss, epoch_metric = 0, 0
+    scaler = torch.cuda.amp.GradScaler() if defs.amp else None
     for batch, (inputs, targets) in enumerate(dataloader):
         # Prep Mini-Batch
         optimizer.zero_grad()
@@ -119,14 +120,16 @@ def step(model, loss_fn, dataloader, optimizer, scheduler, defs, setup, stats):
         targets = targets.to(device=setup['device'], non_blocking=NON_BLOCKING)
 
         # Get loss
-        outputs = model(inputs)
-        loss, _, _ = loss_fn(outputs, targets)
+        with torch.cuda.amp.autocast():
+            outputs = model(inputs)
+            loss, _, _ = loss_fn(outputs, targets)
 
 
         epoch_loss += loss.item()
 
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         metric, name, _ = loss_fn.metric(outputs, targets)
         epoch_metric += metric.item()

@@ -153,13 +153,18 @@ def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, norma
     elif dataset == 'stl10':
         trainset, validset, excluded_data, data_mean, data_std = _build_stl10(path, defs.augmentations, normalize, exclude_num)
         loss_fn = Classification()
+    elif dataset == 'mnist':
+        trainset, validset, excluded_data, data_mean, data_std = _build_mnist(path, defs.augmentations, normalize, exclude_num)
+        loss_fn = Classification()
 
     num_classes = len(np.unique([y for x, y in validset]))
-    if MULTITHREAD_DATAPROCESSING:
-        num_workers = min(torch.get_num_threads(), MULTITHREAD_DATAPROCESSING) if torch.get_num_threads() > 1 else 0
-    else:
-        num_workers = 0
+    # if MULTITHREAD_DATAPROCESSING:
+    #     num_workers = min(torch.get_num_threads(), MULTITHREAD_DATAPROCESSING) if torch.get_num_threads() > 1 else 0
+    # else:
+    #     num_workers = 0
 
+    num_workers = os.cpu_count() // 2 if os.cpu_count() is not None else 0
+    print(f"Using {num_workers} dataloader workers.")
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=min(defs.batch_size, len(trainset)),
                                               shuffle=shuffle, drop_last=True, num_workers=num_workers, pin_memory=PIN_MEMORY)
     validloader = torch.utils.data.DataLoader(validset, batch_size=min(defs.batch_size, len(trainset)),
@@ -167,6 +172,52 @@ def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, norma
 
     return loss_fn, trainloader, validloader, num_classes, excluded_data, data_mean, data_std
 
+# Important function to change lambda to function to use multithread
+def _identity(x):
+    return x
+
+def _build_mnist(data_path, augmentations=True, normalize=True, exclude_num=0):
+    """Define MNIST with everything considered."""
+    # Load data
+    trainset = torchvision.datasets.MNIST(root=data_path, train=True, download=True, transform=transforms.ToTensor())
+    validset = torchvision.datasets.MNIST(root=data_path, train=False, download=True, transform=transforms.ToTensor())
+
+    if mnist_mean is None:
+        data_mean, data_std = _get_meanstd(trainset)
+    else:
+        data_mean, data_std = mnist_mean, mnist_std
+    data, target = [], []
+    for x, y in trainset:
+        x = x.repeat(3, 1, 1)  # convert 1 channel to 3 channel (RGB)
+        data.append(x)
+        target.append(y)
+    data = torch.stack(data)
+    target = torch.tensor(target, dtype=torch.long)
+    
+    trainset = SubTrainDataset(data[exclude_num:], target[exclude_num:])
+    excluded_data = (data[:exclude_num], target[:exclude_num])
+
+    # Organize preprocessing
+    transform = transforms.Normalize(data_mean, data_std) if normalize else _identity
+
+    if augmentations:
+        transform_train = transforms.Compose([
+            transforms.Grayscale(num_output_channels=3),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transform])
+        trainset.transform = transform_train
+    else:
+        trainset.transform = transforms.Compose([
+            transforms.Grayscale(num_output_channels=3),
+            transform])
+
+    # validset needs to convert 1 channel to 3 channel (RGB) as well
+    validset.transform = transforms.Compose([
+        transforms.Grayscale(num_output_channels=3),
+        transforms.ToTensor(),
+        transforms.Normalize(data_mean, data_std) if normalize else _identity])
+    return trainset, validset, excluded_data, data_mean, data_std
 
 def _build_cifar10(data_path, augmentations=True, normalize=True, exclude_num=0):
     """Define CIFAR-10 with everything considered."""
@@ -191,7 +242,8 @@ def _build_cifar10(data_path, augmentations=True, normalize=True, exclude_num=0)
     excluded_data = (data[:exclude_num], target[:exclude_num])
 
     # Organize preprocessing
-    transform = transforms.Compose([transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+    transform = transforms.Normalize(data_mean, data_std) if normalize else _identity
+
     if augmentations:
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
@@ -203,7 +255,7 @@ def _build_cifar10(data_path, augmentations=True, normalize=True, exclude_num=0)
     
     validset.transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+        transforms.Normalize(data_mean, data_std) if normalize else _identity])
 
     return trainset, validset, excluded_data, data_mean, data_std
 
@@ -231,7 +283,8 @@ def _build_stl10(data_path, augmentations=True, normalize=True, exclude_num=0):
     excluded_data = (data[:exclude_num], target[:exclude_num])
 
     # Organize preprocessing
-    transform = transforms.Compose([transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+    transform = transforms.Normalize(data_mean, data_std) if normalize else _identity
+
     if augmentations:
         transform_train = transforms.Compose([
             transforms.RandomCrop(96, padding=4),
@@ -242,7 +295,7 @@ def _build_stl10(data_path, augmentations=True, normalize=True, exclude_num=0):
         trainset.transform = transform
     validset.transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+        transforms.Normalize(data_mean, data_std) if normalize else _identity])
 
     return trainset, validset, excluded_data, data_mean, data_std
 
@@ -268,7 +321,7 @@ def _build_cifar100(data_path, augmentations=True, normalize=True, exclude_num=0
     excluded_data = (data[:exclude_num], target[:exclude_num])
 
     # Organize preprocessing
-    transform = transforms.Compose([transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+    transform = transforms.Normalize(data_mean, data_std) if normalize else _identity
     if augmentations:
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
@@ -279,7 +332,7 @@ def _build_cifar100(data_path, augmentations=True, normalize=True, exclude_num=0
         trainset.transform = transform
     validset.transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+        transforms.Normalize(data_mean, data_std) if normalize else _identity])
 
     return trainset, validset, excluded_data, data_mean, data_std
 

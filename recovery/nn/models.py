@@ -19,7 +19,8 @@ def construct_model(model, num_classes=10, seed=None, num_channels=3, modelkey=N
     """Return various models."""
     if modelkey is None:
         if seed is None:
-            model_init_seed = np.random.randint(0, 2**32 - 10)
+            rng = np.random.default_rng()
+            model_init_seed = rng.integers(0, 2**32 - 10, dtype=np.uint32)
         else:
             model_init_seed = seed
     else:
@@ -112,7 +113,11 @@ def construct_model(model, num_classes=10, seed=None, num_channels=3, modelkey=N
         model = torchvision.models.MobileNetV2(num_classes=num_classes,
                                                inverted_residual_setting=inverted_residual_setting,
                                                width_mult=1.0)
-        model.features[0] = torchvision.models.mobilenet.ConvBNReLU(num_channels, 32, stride=1)  # this is fixed to width=1
+        model.features[0] = nn.Sequential(
+            nn.Conv2d(num_channels, 32, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU6(inplace=True),
+        )
     elif model == 'MNASNet':
         model = torchvision.models.MNASNet(1.0, num_classes=num_classes, dropout=0.2)
     elif model == 'DenseNet121':

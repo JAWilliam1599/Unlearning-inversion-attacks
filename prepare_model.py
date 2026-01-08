@@ -30,7 +30,8 @@ if __name__ == "__main__":
     
 
     
-
+    if args.save_name == '':
+        args.save_name = f's{args.seed}'
     save_folder = os.path.join(args.save_folder, f"{args.model.lower()}_{args.dataset.lower()}_ex{args.exclude_num}_{args.save_name}")
     os.makedirs(save_folder, exist_ok=True)
     setup = recovery.utils.system_startup()

@@ -57,6 +57,7 @@ class ConservativeStrategy(Strategy):
         self.dropout = 0.0
         self.augmentations = True
         self.dryrun = False
+        self.amp = True
         super().__init__(lr=None, epochs=None, dryrun=False)
 
 

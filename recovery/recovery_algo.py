@@ -373,6 +373,68 @@ class UnlearnReconstructor(GradientReconstructor):
             return self.inception(x_trial)
 
 
+
+def Gradient_Cal_only(model, inputs, labels, loss_fn=torch.nn.CrossEntropyLoss()):
+    patched_model = MetaMonkey(model)
+    # Tính toán forward
+    outputs = patched_model(inputs, patched_model.nparameters)
+    
+    # Tính Loss (Lưu ý: loss_fn mặc định thường là mean, .sum() ở đây vẫn ổn nhưng cần hiểu bản chất)
+    loss = loss_fn(outputs, labels).sum()
+    
+    # Tính Gradient
+    # create_graph=True nếu cần dùng grad này để train tiếp (VD: tấn công)
+    # create_graph=False nếu chỉ để log ra xem
+    grad = torch.autograd.grad(loss, patched_model.nparameters.values(),
+                               retain_graph=True, create_graph=True, only_inputs=True)
+    return grad
+    
+def loss_steps_each_corrected(model, inputs, labels, loss_fn=torch.nn.CrossEntropyLoss(), lr=1e-4):
+    """
+    Tính Delta W cho từng ảnh một cách độc lập trên Model gốc.
+    """
+    # 1. Tạo model giả lập từ model gốc
+    # Lưu ý: MetaMonkey chỉ tạo wrapper, không copy deep data ngay lập tức
+    patched_model = MetaMonkey(model)
+    
+    # Lưu lại bộ tham số gốc để reset sau mỗi lần lặp
+    # deepcopy là BẮT BUỘC để đảm bảo origin không bị thay đổi
+    original_params = deepcopy(patched_model.nparameters)
+    
+    all_deltas = []
+
+    print(f"Bắt đầu phân tích {len(inputs)} ảnh...")
+
+    for i in range(len(inputs)):
+        # --- BƯỚC QUAN TRỌNG: RESET VỀ GỐC ---
+        # Đảm bảo mỗi ảnh đều được tính toán trên Model ban đầu
+        patched_model.nparameters = deepcopy(original_params)
+        
+        # 1. Forward & Loss cho 1 ảnh duy nhất
+        # inputs[i:i+1] để giữ nguyên số chiều (1, C, H, W) thay vì (C, H, W)
+        output = patched_model(inputs[i:i+1], patched_model.nparameters)
+        label = labels[i:i+1]
+        
+        loss = loss_fn(output, label) # Mặc định là mean, với 1 ảnh thì là chính nó
+        
+        # 2. Tính Gradient
+        grads = torch.autograd.grad(loss, patched_model.nparameters.values(),
+                                   create_graph=False) # False để tiết kiệm mem
+        
+        # 3. Tính Delta W = lr * grad (Không cần update vào model)
+        # Delta W này chính là lượng thay đổi nếu chỉ unlearn ảnh này
+        delta_w_list = [lr * g for g in grads]
+        
+        # 4. Trích xuất Bias lớp cuối để kiểm tra (theo logic bạn đang làm)
+        # Bias lớp cuối thường là phần tử cuối cùng [-1]
+        bias_last_layer_delta = delta_w_list[-1].detach().cpu().numpy().flatten()
+        
+        all_deltas.append(delta_w_list)
+
+    return all_deltas
+    
+
+
 def loss_steps(model, inputs, labels, loss_fn=torch.nn.CrossEntropyLoss(), lr=1e-4, local_steps=4, batch_size=0):
     """Take a few gradient descent steps to fit the model to the given input."""
     patched_model = MetaMonkey(model)
