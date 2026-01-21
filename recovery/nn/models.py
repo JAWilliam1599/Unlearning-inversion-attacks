@@ -20,7 +20,7 @@ def construct_model(model, num_classes=10, seed=None, num_channels=3, modelkey=N
     if modelkey is None:
         if seed is None:
             rng = np.random.default_rng()
-            model_init_seed = rng.integers(0, 2**32 - 10, dtype=np.uint32)
+            model_init_seed = int(rng.integers(0, 2**32 - 10))
         else:
             model_init_seed = seed
     else:
