@@ -685,11 +685,27 @@ if __name__ == "__main__":
     model_pretrain.to(**setup)
     rec_machine_pretrain = rs.GradientReconstructor(model_pretrain, (dm, ds), recons_config, num_images=args.unlearn_samples)
     
-    total_acc = 0.14  
+    total_acc = 0
+    total_acc_exact = 0  
     # for test_id in range(args.ft_samples // args.unlearn_samples):
     total_loop = args.total_loops
+    total_samples = len(X_all)
+    permuted_indices = torch.randperm(total_samples).tolist()
     for test_id in range(total_loop):
-        unlearn_ids = list(range(test_id * args.unlearn_samples, (test_id + 1) * args.unlearn_samples))
+         #=====================================================
+        #==========CODE MỚI TEST NGẪU NHIÊN=============================
+        start_idx = test_id * args.unlearn_samples
+        end_idx = (test_id + 1) * args.unlearn_samples
+    
+            # Kiểm tra để không bị index out of bounds
+        if start_idx >= total_samples:
+            break
+        
+        # 2. Lấy unlearn_ids từ danh sách đã xáo trộn thay vì range tuần tự
+        unlearn_ids = permuted_indices[start_idx : min(end_idx, total_samples)]
+        
+        #=====================================================================
+        #=====================================================================
         print(f"Unlearn {unlearn_ids}")
         unlearn_folder = os.path.join(save_folder, f'unlearn_ft_batch{test_id}')
         os.makedirs(unlearn_folder, exist_ok=True)
@@ -706,24 +722,24 @@ if __name__ == "__main__":
         y_unlearn = torch.tensor([yt for i, yt in enumerate(y_all) if i in unlearn_ids])
 
         print(f"***** Train unlearned model (withouth {unlearn_ids}) *****")
-        # model_unlearn, _ = rs.construct_model(args.model, num_classes=num_classes, num_channels=3)
-        # model_unlearn.load_state_dict(state_dict)
-        # model_unlearn.eval()
-        # model_unlearn.to(**setup)
-        # if len(X_list) > 0:
-        #     unlearn_stats = rs.train(model_unlearn, loss_fn, trainloader_unlearn, validloader, defs, setup=setup, ckpt_path=unlearn_folder, finetune=True)
-        # else:
-        #     unlearn_stats = None
-        # model_unlearn.cpu()
-        # resdict = {'tr_args': args.__dict__,
-        #     'tr_strat': defs.__dict__,
-        #     'stats': unlearn_stats,
-        #     'unlearn_batch_id': test_id}
-        # torch.save(resdict, os.path.join(unlearn_folder, 'finetune_params.pth'))
-        # # unlearn_params =  [param.detach() for param in model_unlearn.parameters()]
-        # un_diffs = [(un_param.detach().cpu() - org_param.detach().cpu()).detach() for (un_param, org_param) in zip(model_unlearn.parameters(), model_pretrain.parameters())]
+        model_unlearn, _ = rs.construct_model(args.model, num_classes=num_classes, num_channels=3)
+        model_unlearn.load_state_dict(state_dict)
+        model_unlearn.eval()
+        model_unlearn.to(**setup)
+        if len(X_list) > 0:
+            unlearn_stats = rs.train(model_unlearn, loss_fn, trainloader_unlearn, validloader, defs, setup=setup, ckpt_path=unlearn_folder, finetune=True)
+        else:
+            unlearn_stats = None
+        model_unlearn.cpu()
+        resdict = {'tr_args': args.__dict__,
+            'tr_strat': defs.__dict__,
+            'stats': unlearn_stats,
+            'unlearn_batch_id': test_id}
+        torch.save(resdict, os.path.join(unlearn_folder, 'finetune_params.pth'))
+        # unlearn_params =  [param.detach() for param in model_unlearn.parameters()]
+        un_diffs = [(un_param.detach().cpu() - org_param.detach().cpu()).detach() for (un_param, org_param) in zip(model_unlearn.parameters(), model_pretrain.parameters())]
 
-        # print("Start reconstruction.")
+        print("Start reconstruction.")
         
 
 
@@ -734,7 +750,8 @@ if __name__ == "__main__":
         # reconstruction
         
         
-        # exact_diff = [-(ft_diff * args.ft_samples - un_diff * len(X_list)).detach().to(**setup) for (ft_diff, un_diff) in zip(ft_diffs, un_diffs)]
+        exact_diff = [-(ft_diff * args.ft_samples - un_diff * len(X_list)).detach().to(**setup) for (ft_diff, un_diff) in zip(ft_diffs, un_diffs)]
+        exact_diff = [p.detach().cpu() for p in exact_diff]
         # rec_machine_pretrain.model.eval()
         # result_exact = rec_machine_pretrain.reconstruct(exact_diff, normalizer(X_unlearn.to(**setup)), y_unlearn.to(setup['device']), img_shape=(3, img_size, img_size))
         # process_recons_results(result_exact, X_unlearn, figpath=figure_folder, recons_path=recons_folder, filename=f'exact{test_id}_{index[test_id].item()}')
@@ -759,7 +776,7 @@ if __name__ == "__main__":
         # So sánh       
         
         if class_representative_gradients is not None:
-            # print("\n--- Label Recovery Result ---")
+            print("\n--- Label Recovery Result (approximate) ---")
             
             # 1. Thực hiện dự đoán
     
@@ -796,19 +813,47 @@ if __name__ == "__main__":
                 print(f"--> Batch Accuracy: {acc:.2f}%")
                 f.write(f"--> Batch Accuracy: {acc:.2f}%\n")
 
+
+            # Exact unlearning prediction
+            print("-" * 35)
+            print("\n--- Label Recovery Result (exact) ---")
+            predicted_counts_exact = predict_label_distribution_bias_peeling(exact_diff, class_representative_gradients, args.unlearn_samples)
+
+            actual_counts_exact = np.zeros(num_classes, dtype=int)
+            for y in y_unlearn_cpu:
+                actual_counts_exact[y] += 1
+
+            print(f"{'Class':<10} | {'Real':<5} | {'Pred':<5} | {'Diff'}")
+            print("-" * 35)
+            correct_count_exact = 0
+            with open(os.path.join(unlearn_folder, 'prediction_exact.txt'), 'w') as f_exact:
+                for i in range(num_classes):
+                    diff_exact = predicted_counts_exact[i] - actual_counts_exact[i]
+                    if actual_counts_exact[i] > 0 or predicted_counts_exact[i] > 0: # Chỉ in những class có xuất hiện
+                        print(f"{classes[i]:<10} | {actual_counts_exact[i]:<5} | {predicted_counts_exact[i]:<5} | {diff_exact}")
+                        f_exact.write(f"{classes[i]:<10} | {actual_counts_exact[i]:<5} | {predicted_counts_exact[i]:<5} | {diff_exact}\n")
+                    
+                    # Tính độ chính xác đơn giản (Total Variation Distance / 2)
+                    correct_count_exact += min(actual_counts_exact[i], predicted_counts_exact[i])
+                
+                acc_exact = correct_count_exact / args.unlearn_samples * 100
+                total_acc_exact += acc_exact
+                print(f"--> Batch Accuracy (Exact): {acc_exact:.2f}%")
+                f_exact.write(f"--> Batch Accuracy (Exact): {acc_exact:.2f}%\n")
+        
+       
             # Clean everything in GPU
             del X_unlearn_gpu, y_unlearn_gpu
             del all_deltas
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            # print("-" * 35)
-        
-       
+                
         # rec_machine_ft.model.eval()
         # result_approx = rec_machine_ft.reconstruct(approx_diff, normalizer(X_unlearn.to(**setup)), y_unlearn.to(setup['device']), img_shape=(3, img_size, img_size))
         # process_recons_results(result_approx, X_unlearn, figpath=figure_folder, recons_path=recons_folder, filename=f'approx{test_id}_{index[test_id].item()}')
     print(f"--> Total Accuracy: {(total_acc/total_loop):.2f}%") 
+    print(f"--> Total Accuracy Exact: {(total_acc_exact/total_loop):.2f}%")
         
 
 
