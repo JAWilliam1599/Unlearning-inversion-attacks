@@ -65,6 +65,7 @@ def system_startup(args=None, defs=None):
 
 def set_random_seed(seed=233):
     """233 = 144 + 89 is my favorite number."""
+    seed = int(seed)
     torch.manual_seed(seed + 1)
     torch.cuda.manual_seed(seed + 2)
     torch.cuda.manual_seed_all(seed + 3)
